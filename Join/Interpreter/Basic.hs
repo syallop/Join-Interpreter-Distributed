@@ -26,7 +26,7 @@ import Join.Interpreter.Basic.MessageBox
 import Join.Interpreter.Basic.Rule
 
 import           Control.Applicative                ((<$>),(<*>),pure)
-import           Control.Concurrent                 (forkIO,newMVar,newEmptyMVar,threadDelay)
+import           Control.Concurrent                 (forkIO,newMVar,newEmptyMVar,threadDelay,ThreadId,forkFinally)
 import           Control.Concurrent.MVar            (MVar,takeMVar,putMVar,readMVar)
 import           Control.Monad                      (liftM)
 import           Control.Monad.IO.Class             (liftIO)
@@ -54,18 +54,52 @@ type RuleMapRef = MVar RuleMap
 newRuleMapRef :: IO RuleMapRef
 newRuleMapRef = newMVar (RuleMap Map.empty)
 
+-- | Child 'Process's are tracked in a list of MVar's,
+-- each of which is left empty until the process has finished.
+-- This allows the main process to wait for every subprocess to
+-- finish before exiting.
+type Children = MVar [MVar ()]
+
+-- | Create a new empty collection of Children.
+emptyChildren :: IO Children
+emptyChildren = newMVar []
+
+-- | Wait for all children to finish.
+-- (Every child has put (), and is taken from the collection
+-- , leaving it empty []).
+waitForChildren :: Children -> IO ()
+waitForChildren children = do
+  cs <- takeMVar children
+  case cs of
+    []   -> return ()
+    m:ms -> do
+      putMVar children ms
+      takeMVar m
+      waitForChildren children
+
+-- | Fork a new child thread in the given context.
+forkChild :: Children -> IO () -> IO ThreadId
+forkChild children io = do
+  m  <- newEmptyMVar
+  cs <- takeMVar children
+  putMVar children (m:cs)
+  forkFinally io (\_ -> putMVar m ())
+
 -- | Run a 'Process a' computation in IO.
 run :: Process a -> IO a
 run p = do
-  ruleMapRef<- newRuleMapRef
+  ruleMapRef <- newRuleMapRef
+  children   <- emptyChildren
   let replyCtx = Map.empty
-  runWith ruleMapRef replyCtx p
+  a <- runWith ruleMapRef children replyCtx p
+  waitForChildren children
+  return a
 
 -- | Run a 'Process a' computation in IO under the calling context of a
 -- 'RuleMapRef' (mapping ChanId's to responsible Rules)
 -- and a 'ReplyCtx' (mapping replied to ChanId's to the locations waiting for a response.)
-runWith :: RuleMapRef -> ReplyCtx -> Process a -> IO a
-runWith ruleMapRef replyCtx p = do
+runWith :: RuleMapRef -> Children -> ReplyCtx -> Process a -> IO a
+runWith ruleMapRef children replyCtx p = do
   instr <- viewT p
   case instr of
 
@@ -73,31 +107,31 @@ runWith ruleMapRef replyCtx p = do
 
     Def definition
       :>>= k -> do registerDefinition (toDefinitions definition) ruleMapRef
-                   runWith ruleMapRef replyCtx (k ())
+                   runWith ruleMapRef children replyCtx (k ())
 
     NewChannel
       :>>= k -> do cId <- newChanId
-                   runWith ruleMapRef replyCtx (k $ inferSync cId)
+                   runWith ruleMapRef children replyCtx (k $ inferSync cId)
 
     Send c m
-      :>>= k -> do registerMessage c m ruleMapRef
-                   runWith ruleMapRef replyCtx (k ())
+      :>>= k -> do registerMessage c m children ruleMapRef
+                   runWith ruleMapRef children replyCtx (k ())
 
     Spawn p
-      :>>= k -> do forkIO $ runWith ruleMapRef replyCtx p
-                   runWith ruleMapRef replyCtx (k ())
+      :>>= k -> do forkChild children $ runWith ruleMapRef children replyCtx p
+                   runWith ruleMapRef children replyCtx (k ())
 
     Sync sc sm
-      :>>= k -> do syncVal <- registerSyncMessage sc sm ruleMapRef
-                   runWith ruleMapRef replyCtx (k syncVal)
+      :>>= k -> do syncVal <- registerSyncMessage sc sm children ruleMapRef
+                   runWith ruleMapRef children replyCtx (k syncVal)
 
     Reply sc m
       :>>= k -> do putMVar (lookupReplyChan replyCtx (getId sc)) m
-                   runWith ruleMapRef replyCtx (k ())
+                   runWith ruleMapRef children replyCtx (k ())
 
     With p q 
-      :>>= k -> do mapM_ (forkIO . runWith ruleMapRef replyCtx) [p,q]
-                   runWith ruleMapRef replyCtx (k ())
+      :>>= k -> do mapM_ (forkChild children . runWith ruleMapRef children replyCtx) [p,q]
+                   runWith ruleMapRef children replyCtx (k ())
 
 -- | Lookup a ChanId's associated ReplyChan 'r' within a ReplyCtx.
 -- The ChanId must have an associated ReplyChan and it must
@@ -110,8 +144,8 @@ lookupReplyChan replyCtx cId = case Map.lookup cId replyCtx of
     Just replyChan' -> replyChan'
 
 -- | On an Asynchronous Channel, register a message 'a'.
-registerMessage :: MessageType a => Channel A (a :: *) -> a -> RuleMapRef -> IO ()
-registerMessage chan msg ruleMapRef = do
+registerMessage :: MessageType a => Channel A (a :: *) -> a -> Children -> RuleMapRef -> IO ()
+registerMessage chan msg children ruleMapRef = do
   (RuleMap ruleMap) <- readMVar ruleMapRef
   let cId     = getId chan
       ruleRef = fromMaybe (error "registerMessage: ChanId has no RuleRef") $ Map.lookup cId ruleMap
@@ -122,12 +156,13 @@ registerMessage chan msg ruleMapRef = do
 
   case mProcCtx of
     Nothing -> return ()
-    Just (p,replyCtx) -> (forkIO $ runWith ruleMapRef replyCtx p) >> return ()
+    Just (p,replyCtx) -> do forkChild children $ runWith ruleMapRef children replyCtx p
+                            return ()
 
 -- | On a Synchronous Channel, register a message 'a' and return a 'Response r' on which a response can
 -- be waited.
-registerSyncMessage :: (MessageType a,MessageType r) => Channel (S r) a -> a -> RuleMapRef -> IO (Response r)
-registerSyncMessage chan msg ruleMapRef = do
+registerSyncMessage :: (MessageType a,MessageType r) => Channel (S r) a -> a -> Children -> RuleMapRef -> IO (Response r)
+registerSyncMessage chan msg children ruleMapRef = do
   (RuleMap ruleMap) <- readMVar ruleMapRef
   let cId = getId chan
       ruleRef = fromMaybe (error "registerSyncMessage: ChanId has no RuleRef") $ Map.lookup cId ruleMap
@@ -135,13 +170,14 @@ registerSyncMessage chan msg ruleMapRef = do
   (SomeRule rule) <- takeMVar ruleRef
   replyChan <- newEmptyMVar
   response <- emptyResponse
-  forkIO $ waitOnReply replyChan response
+  forkChild children $ waitOnReply replyChan response
   let (rule',mProcCtx) = addMessage (SyncMessage msg replyChan) cId rule
   putMVar ruleRef (SomeRule rule')
 
   case mProcCtx of
     Nothing -> return response
-    Just (p,replyCtx) -> (forkIO $ runWith ruleMapRef replyCtx p) >> return response
+    Just (p,replyCtx) -> do forkChild children $ runWith ruleMapRef children replyCtx p
+                            return response
   where
     waitOnReply :: MessageType r => ReplyChan r -> Response r -> IO ()
     waitOnReply replyChan response = takeMVar replyChan >>= writeResponse response
