@@ -2,11 +2,11 @@
            , OverloadedStrings
            , FlexibleInstances
            , ScopedTypeVariables
-
            , DeriveDataTypeable
            , GADTs
            , DataKinds
            , KindSignatures
+           , RankNTypes
            , PolyKinds
  #-}
 {-|

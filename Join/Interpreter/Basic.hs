@@ -31,8 +31,6 @@ import           Control.Applicative                ((<$>),(<*>),pure)
 import           Control.Concurrent                 (forkIO,newMVar,newEmptyMVar,threadDelay,ThreadId,forkFinally)
 import           Control.Concurrent.MVar            (MVar,takeMVar,putMVar,readMVar)
 import           Control.Monad                      (liftM,void)
-import           Control.Monad.IO.Class             (liftIO)
-import           Control.Monad.Operational
 import qualified Data.Bimap                as Bimap
 import           Data.List                          (nub)
 import qualified Data.Map                  as Map
@@ -111,7 +109,7 @@ instance Interpreter BasicInterpreter IO where
     ,_iDef        = \definitions
                      -> registerDefinition (toDefinitions definitions) ruleMapRef
 
-    ,_iNewChannel = inferSync <$> newChanId
+    ,_iNewChannel = inferChannel <$> newChanId
 
     ,_iSend       = \c m
                      -> registerMessage c m children ruleMapRef
@@ -175,7 +173,7 @@ registerSyncMessage chan msg children ruleMapRef = do
     Just (p,replyCtx) -> do forkChild children $ interpretWith (BasicInterpreter children ruleMapRef replyCtx) p
                             return response
   where
-    waitOnReply :: MessageType r => ReplyChan r -> Response r -> IO ()
+    waitOnReply :: ReplyChan r -> Response r -> IO ()
     waitOnReply replyChan response = takeMVar replyChan >>= writeResponse response
 
 -- | Register a new Join Definition, associating all contained Channels
