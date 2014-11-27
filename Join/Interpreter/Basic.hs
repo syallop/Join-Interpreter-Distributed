@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds
             ,GADTs
             ,KindSignatures
+            ,MultiParamTypeClasses
             ,PolyKinds
             ,RankNTypes
   #-}
@@ -19,6 +20,7 @@ module Join.Interpreter.Basic
 import Prelude hiding (lookup)
 
 import Join
+import Join.Interpreter.Interface
 import Join.Pattern.Rep
 import Join.Interpreter.Basic.Debug
 import Join.Interpreter.Basic.Status
@@ -28,7 +30,7 @@ import Join.Interpreter.Basic.Rule
 import           Control.Applicative                ((<$>),(<*>),pure)
 import           Control.Concurrent                 (forkIO,newMVar,newEmptyMVar,threadDelay,ThreadId,forkFinally)
 import           Control.Concurrent.MVar            (MVar,takeMVar,putMVar,readMVar)
-import           Control.Monad                      (liftM)
+import           Control.Monad                      (liftM,void)
 import           Control.Monad.IO.Class             (liftIO)
 import           Control.Monad.Operational
 import qualified Data.Bimap                as Bimap
@@ -50,19 +52,12 @@ newtype RuleMap = RuleMap{_ruleMap :: Map.Map ChanId RuleRef}
 -- | A MVar reference to a RuleMap.
 type RuleMapRef = MVar RuleMap
 
--- | Create a new empty RuleMapRef
-newRuleMapRef :: IO RuleMapRef
-newRuleMapRef = newMVar (RuleMap Map.empty)
 
 -- | Child 'Process's are tracked in a list of MVar's,
 -- each of which is left empty until the process has finished.
 -- This allows the main process to wait for every subprocess to
 -- finish before exiting.
 type Children = MVar [MVar ()]
-
--- | Create a new empty collection of Children.
-emptyChildren :: IO Children
-emptyChildren = newMVar []
 
 -- | Wait for all children to finish.
 -- (Every child has put (), and is taken from the collection
@@ -85,53 +80,54 @@ forkChild children io = do
   putMVar children (m:cs)
   forkFinally io (\_ -> putMVar m ())
 
--- | Run a 'Process a' computation in IO.
+
+-- | Interpreter state.
+data BasicInterpreter = BasicInterpreter
+  {_children   :: Children   -- ^ Reference to spawned sub-processes
+  ,_ruleMapRef :: RuleMapRef -- ^ Map Channel's ids to responsible Rules.
+  ,_replyCtx   :: ReplyCtx   -- ^ Map synchronous channel ids to the location waiting for a response.
+  }
+
+-- | Create a new BasicInterpreter instance.
+mkBasicInterpreter :: IO BasicInterpreter
+mkBasicInterpreter = BasicInterpreter
+  <$> newMVar []
+  <*> newMVar (RuleMap Map.empty)
+  <*> pure Map.empty
+
+-- | Run a 'Process a' computation in IO
+-- ,terminating only when all sub-processes have terminated.
 run :: Process a -> IO a
 run p = do
-  ruleMapRef <- newRuleMapRef
-  children   <- emptyChildren
-  let replyCtx = Map.empty
-  a <- runWith ruleMapRef children replyCtx p
-  waitForChildren children
+  basicInterpreter <- mkBasicInterpreter
+  a <- interpretWith basicInterpreter p
+  waitForChildren (_children basicInterpreter)
   return a
 
--- | Run a 'Process a' computation in IO under the calling context of a
--- 'RuleMapRef' (mapping ChanId's to responsible Rules)
--- and a 'ReplyCtx' (mapping replied to ChanId's to the locations waiting for a response.)
-runWith :: RuleMapRef -> Children -> ReplyCtx -> Process a -> IO a
-runWith ruleMapRef children replyCtx p = do
-  instr <- viewT p
-  case instr of
+instance Interpreter BasicInterpreter IO where
+  getInterpreterFs basicInterpreter@(BasicInterpreter children ruleMapRef replyCtx) = InterpreterFs
+    {_iReturn     = \a -> return a
 
-    Return a -> return a
+    ,_iDef        = \definitions
+                     -> registerDefinition (toDefinitions definitions) ruleMapRef
 
-    Def definition
-      :>>= k -> do registerDefinition (toDefinitions definition) ruleMapRef
-                   runWith ruleMapRef children replyCtx (k ())
+    ,_iNewChannel = inferSync <$> newChanId
 
-    NewChannel
-      :>>= k -> do cId <- newChanId
-                   runWith ruleMapRef children replyCtx (k $ inferSync cId)
+    ,_iSend       = \c m
+                     -> registerMessage c m children ruleMapRef
 
-    Send c m
-      :>>= k -> do registerMessage c m children ruleMapRef
-                   runWith ruleMapRef children replyCtx (k ())
+    ,_iSpawn      = \p
+                     -> void $ forkChild children $ interpretWith basicInterpreter p
 
-    Spawn p
-      :>>= k -> do forkChild children $ runWith ruleMapRef children replyCtx p
-                   runWith ruleMapRef children replyCtx (k ())
+    ,_iSync       = \sc sm
+                     -> registerSyncMessage sc sm children ruleMapRef
 
-    Sync sc sm
-      :>>= k -> do syncVal <- registerSyncMessage sc sm children ruleMapRef
-                   runWith ruleMapRef children replyCtx (k syncVal)
+    ,_iReply      = \sc m
+                     -> putMVar (lookupReplyChan replyCtx (getId sc)) m
 
-    Reply sc m
-      :>>= k -> do putMVar (lookupReplyChan replyCtx (getId sc)) m
-                   runWith ruleMapRef children replyCtx (k ())
-
-    With p q 
-      :>>= k -> do mapM_ (forkChild children . runWith ruleMapRef children replyCtx) [p,q]
-                   runWith ruleMapRef children replyCtx (k ())
+    ,_iWith       = \p q
+                     -> mapM_ (forkChild children . interpretWith basicInterpreter) [p,q]
+    }
 
 -- | Lookup a ChanId's associated ReplyChan 'r' within a ReplyCtx.
 -- The ChanId must have an associated ReplyChan and it must
@@ -156,7 +152,7 @@ registerMessage chan msg children ruleMapRef = do
 
   case mProcCtx of
     Nothing -> return ()
-    Just (p,replyCtx) -> do forkChild children $ runWith ruleMapRef children replyCtx p
+    Just (p,replyCtx) -> do forkChild children $ interpretWith (BasicInterpreter children ruleMapRef replyCtx) p
                             return ()
 
 -- | On a Synchronous Channel, register a message 'a' and return a 'Response r' on which a response can
@@ -176,7 +172,7 @@ registerSyncMessage chan msg children ruleMapRef = do
 
   case mProcCtx of
     Nothing -> return response
-    Just (p,replyCtx) -> do forkChild children $ runWith ruleMapRef children replyCtx p
+    Just (p,replyCtx) -> do forkChild children $ interpretWith (BasicInterpreter children ruleMapRef replyCtx) p
                             return response
   where
     waitOnReply :: MessageType r => ReplyChan r -> Response r -> IO ()
