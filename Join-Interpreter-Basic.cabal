@@ -86,6 +86,8 @@ library
 
                      , Join-Language >=0.2  && <0.3
 
+                     , Network-NS    >=0.1  && <0.2
+
                      , bimap         >=0.2  && <0.3
                      , bytestring    >=0.10 && <0.11
                      , containers    >=0.5  && <0.6
