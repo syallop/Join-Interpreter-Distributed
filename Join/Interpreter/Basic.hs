@@ -42,13 +42,17 @@ import           Data.Unique                        (hashUnique,newUnique)
 data SomeRule = forall tss. SomeRule (Rule tss StatusPattern)
 
 -- | A MVar reference to SomeRule
-type RuleRef = MVar SomeRule
+type SomeRuleRef = MVar SomeRule
 
--- | Associate ChanId's to the RuleRef which is responsible for it.
-newtype RuleMap = RuleMap{_ruleMap :: Map.Map ChanId RuleRef}
+-- | Something responsible for handling a Channel.
+data ChannelOwner
+  = OwnedByLocalRule SomeRuleRef
 
--- | A MVar reference to a RuleMap.
-type RuleMapRef = MVar RuleMap
+-- | Associate ChanId's to the code that 'owns' it.
+newtype ChannelOwners = ChannelOwners{_channelOwners :: Map.Map ChanId ChannelOwner}
+
+-- | A MVar reference to 'ChannelOwners'
+type ChannelOwnersRef = MVar ChannelOwners
 
 
 -- | Child 'Process's are tracked in a list of MVar's,
@@ -81,16 +85,22 @@ forkChild children io = do
 
 -- | Interpreter state.
 data BasicInterpreter = BasicInterpreter
-  {_children   :: Children   -- ^ Reference to spawned sub-processes
-  ,_ruleMapRef :: RuleMapRef -- ^ Map Channel's ids to responsible Rules.
-  ,_replyCtx   :: ReplyCtx   -- ^ Map synchronous channel ids to the location waiting for a response.
+  { -- | Reference to spawned sub-processes.
+    _children         :: Children
+
+  -- | Map ChanId's to the code responsible for handling them.
+  {-, _ruleMapRef :: RuleMapRef-}
+  , _channelOwnersRef :: ChannelOwnersRef
+
+   -- | Map synchronous channel ids to the location waiting for a response.
+  , _replyCtx   :: ReplyCtx
   }
 
 -- | Create a new BasicInterpreter instance.
 mkBasicInterpreter :: IO BasicInterpreter
 mkBasicInterpreter = BasicInterpreter
   <$> newMVar []
-  <*> newMVar (RuleMap Map.empty)
+  <*> newMVar (ChannelOwners Map.empty)
   <*> pure Map.empty
 
 -- | Run a 'Process a' computation in IO
@@ -138,56 +148,61 @@ lookupReplyChan replyCtx cId = case Map.lookup cId replyCtx of
     Just replyChan' -> replyChan'
 
 -- | On an Asynchronous Channel, register a message 'a'.
-registerMessage :: MessageType a => Channel A (a :: *) -> a -> Children -> RuleMapRef -> IO ()
-registerMessage chan msg children ruleMapRef = do
-  (RuleMap ruleMap) <- readMVar ruleMapRef
-  let cId     = getId chan
-      ruleRef = fromMaybe (error "registerMessage: ChanId has no RuleRef") $ Map.lookup cId ruleMap
+registerMessage :: MessageType a => Channel A (a :: *) -> a -> Children -> ChannelOwnersRef -> IO ()
+registerMessage chan msg children channelOwnersRef = do
+  ChannelOwners channelOwners <- readMVar channelOwnersRef
+  let cId          = getId chan
+      channelOwner = fromMaybe (error "registerMessage: ChanId has no owner") $ Map.lookup cId channelOwners
 
-  (SomeRule rule) <- takeMVar ruleRef
-  let (rule',mProcCtx) = addMessage (Message msg) cId rule
-  putMVar ruleRef (SomeRule rule')
+  case channelOwner of
+    OwnedByLocalRule someRuleRef
+      -> do SomeRule rule <- takeMVar someRuleRef
+            let (rule',mProcCtx) = addMessage (Message msg) cId rule
+            putMVar someRuleRef (SomeRule rule')
 
-  case mProcCtx of
-    Nothing -> return ()
-    Just (p,replyCtx) -> do forkChild children $ interpretWith (BasicInterpreter children ruleMapRef replyCtx) p
-                            return ()
+            case mProcCtx of
+              Nothing -> return ()
+              Just (p,replyCtx) -> do forkChild children $ interpretWith (BasicInterpreter children channelOwnersRef replyCtx) p
+                                      return ()
 
 -- | On a Synchronous Channel, register a message 'a' and return a 'Response r' on which a response can
 -- be waited.
-registerSyncMessage :: (MessageType a,MessageType r) => Channel (S r) a -> a -> Children -> RuleMapRef -> IO (Response r)
-registerSyncMessage chan msg children ruleMapRef = do
-  (RuleMap ruleMap) <- readMVar ruleMapRef
-  let cId = getId chan
-      ruleRef = fromMaybe (error "registerSyncMessage: ChanId has no RuleRef") $ Map.lookup cId ruleMap
+registerSyncMessage :: (MessageType a,MessageType r) => Channel (S r) a -> a -> Children -> ChannelOwnersRef -> IO (Response r)
+registerSyncMessage chan msg children channelOwnersRef = do
+  ChannelOwners channelOwners <- readMVar channelOwnersRef
+  let cId          = getId chan
+      channelOwner = fromMaybe (error "registerSyncMessage: ChanId has no owner") $ Map.lookup cId channelOwners
 
-  (SomeRule rule) <- takeMVar ruleRef
-  replyChan <- newEmptyMVar
-  response <- emptyResponse
-  forkChild children $ waitOnReply replyChan response
-  let (rule',mProcCtx) = addMessage (SyncMessage msg replyChan) cId rule
-  putMVar ruleRef (SomeRule rule')
+  case channelOwner of
+    OwnedByLocalRule someRuleRef
+      -> do SomeRule rule <- takeMVar someRuleRef
 
-  case mProcCtx of
-    Nothing -> return response
-    Just (p,replyCtx) -> do forkChild children $ interpretWith (BasicInterpreter children ruleMapRef replyCtx) p
-                            return response
+            replyChan <- newEmptyMVar
+            response  <- emptyResponse
+            forkChild children $ waitOnReply replyChan response
+            let (rule',mProcCtx) = addMessage (SyncMessage msg replyChan) cId rule
+            putMVar someRuleRef (SomeRule rule')
+
+            case mProcCtx of
+              Nothing -> return response
+              Just (p,replyCtx) -> do forkChild children $ interpretWith (BasicInterpreter children channelOwnersRef replyCtx) p
+                                      return response
   where
     waitOnReply :: ReplyChan r -> Response r -> IO ()
     waitOnReply replyChan response = takeMVar replyChan >>= writeResponse response
 
 -- | Register a new Join Definition, associating all contained Channels
 -- with the stored RuleRef.
-registerDefinition :: Definitions tss Inert -> RuleMapRef -> IO ()
-registerDefinition definition ruleMapRef = do
-  (RuleMap ruleMap) <- takeMVar ruleMapRef
+registerDefinition :: Definitions tss Inert -> ChannelOwnersRef -> IO ()
+registerDefinition definition channelOwnersRef = do
+  ChannelOwners channelOwners <- takeMVar channelOwnersRef
   rId <- newRuleId
   let someRule = SomeRule $ mkRule definition rId
       cIds     = uniqueIds definition
   rlRef <- newMVar someRule
-  let additionalMappings = Map.fromSet (const rlRef) cIds
-      ruleMap'           = additionalMappings `Map.union` ruleMap :: Map.Map ChanId RuleRef
-  putMVar ruleMapRef (RuleMap ruleMap')
+  let additionalMappings = Map.fromSet (const (OwnedByLocalRule rlRef)) cIds
+      channelOwners'     = additionalMappings `Map.union` channelOwners
+  putMVar channelOwnersRef $ ChannelOwners channelOwners'
 
 -- | New unique ChanId.
 newChanId :: IO ChanId
