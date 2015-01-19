@@ -5,6 +5,9 @@
             ,PolyKinds
             ,RankNTypes
             ,ScopedTypeVariables
+            ,TypeOperators
+
+            ,FlexibleContexts
   #-}
 {-|
 Module      : Join.Interpreter.Basic
@@ -17,18 +20,12 @@ This module exports an interpreter for 'Process a' s written in Join.Language.
 module Join.Interpreter.Basic
     ( -- * Run an Interpreter
       run
-    , withNameServerRun
-    , BasicInterpreter()
-
-    -- * Distributed channel functions
-    , lookupChannel
-    , registerChannel
     ) where
 
 import Prelude hiding (lookup)
 
 import Join
-import Join.Interpreter.Interface
+import Join.Language.Distributed
 import Join.Pattern.Rep
 import Join.Interpreter.Basic.Debug
 import Join.Interpreter.Basic.Status
@@ -36,6 +33,10 @@ import Join.Interpreter.Basic.MessageBox
 import Join.Interpreter.Basic.Rule
 
 import Network.NS
+
+import DSL.Instruction
+import DSL.Program
+import DSL.Program.Interpreter
 
 import           Control.Applicative                ((<$>),(<*>),pure)
 import           Control.Concurrent                 (forkIO,newMVar,newEmptyMVar,threadDelay,ThreadId,forkFinally)
@@ -100,7 +101,6 @@ data BasicInterpreter = BasicInterpreter
     _children         :: Children
 
   -- | Map ChanId's to the code responsible for handling them.
-  {-, _ruleMapRef :: RuleMapRef-}
   , _channelOwnersRef :: ChannelOwnersRef
 
    -- | Map synchronous channel ids to the location waiting for a response.
@@ -124,78 +124,90 @@ mkBasicInterpreter = BasicInterpreter
   <*> newMVar Map.empty
   <*> pure Nothing
 
--- | Run a 'Process a' computation in IO
--- ,terminating only when all sub-processes have terminated.
-run :: Process a -> IO a
-run p = do
-  basicInterpreter <- mkBasicInterpreter
-  a <- interpretWith basicInterpreter p
-  waitForChildren (_children basicInterpreter)
-  return a
+type BIState = BasicInterpreter
 
--- | Run a 'Process a' computation in IO
--- , terminating only when all sub-processes have terminated.
---
--- Connect to a nameserver at the given IP address and port number,
--- feeding a handle to the interpreter into the interpreted process
--- for use with 'register/lookup channel'.
-withNameServerRun :: String -- ^ IPV4 address of NameServer
-                  -> Int    -- ^ Port of NameServer
-                  -> (BasicInterpreter -> Process a) -- ^ Root-level process to interpret
-                  -> IO a
-withNameServerRun address port fp = do
-    -- Link an interpreter instance to a nsClient instance
-    basicInterpreter <- mkBasicInterpreter
-    nsClient         <- runNewClient address port (msgHandler basicInterpreter)
-    let basicInterpreter' = basicInterpreter{_nsClient = Just nsClient}
+-- | Interpreter for the core language
+coreInterpreter :: BIState -> Interpreter Instruction IO
+coreInterpreter basicInterpreter@(BasicInterpreter children channelOwnersRef replyCtx _ _) = Interpreter intF
+  where
+    intF :: Instruction (p :: * -> *) a -> IO a
+    intF i = case i of
 
-    result <- interpretWith basicInterpreter' (fp basicInterpreter')
-    waitForChildren (_children basicInterpreter')
+        Def definitions
+          -> registerDefinition (toDefinitions definitions) channelOwnersRef
+
+        NewChannel
+          -> inferChannel <$> newChanId
+
+        Send c m
+          -> registerMessage c m basicInterpreter
+
+        Spawn p
+          -> void $ forkChild children $ interpretProgramUsing (coreInterpreter basicInterpreter) p
+
+        Sync sc sm
+          -> registerSyncMessage sc sm basicInterpreter
+
+        Reply sc m
+          -> putMVar (lookupReplyChan replyCtx (getId sc)) m
+
+        With p q
+          -> mapM_ (forkChild children . interpretProgramUsing (coreInterpreter basicInterpreter)) [p,q]
+
+        IOAction io
+          -> io
+
+-- Interpreter for the distributed extension
+distInterpreter :: BIState -> Interpreter DistInstruction IO
+distInterpreter basicInterpreter@(BasicInterpreter children channelOwnersRef replyCtx _ _) = Interpreter intF
+  where
+    intF :: DistInstruction (p :: * -> *) a -> IO a
+    intF i = case i of
+        LookupChannel n
+          -> interpretProgramUsing (coreInterpreter basicInterpreter) $ lookupChannel' basicInterpreter n
+
+        RegisterChannel n c
+          -> interpretProgramUsing (coreInterpreter basicInterpreter) $ registerChannel' basicInterpreter n c
+
+-- Combined interpreter for the core and distributed instructions.
+combInterpreters :: BIState -> Interpreters (Instruction :+: DistInstruction) IO
+combInterpreters bi = (coreInterpreter bi) :*: (distInterpreter bi)
+
+run :: InterpretUsing Interpreters i (Instruction :+: DistInstruction) IO
+    => Program i a
+    -> Maybe (String,Int)
+    -> IO a
+run p maddr = do
+    basicInterpreter <- case maddr of
+      Nothing
+        -> mkBasicInterpreter
+      Just (address,port)
+        -> do basicInterpreter <- mkBasicInterpreter
+              nsClient <- runNewClient address port (msgHandler basicInterpreter)
+              return $ basicInterpreter{_nsClient = Just nsClient}
+
+    result <- interpretProgramUsing (combInterpreters basicInterpreter) p
+
+    waitForChildren (_children basicInterpreter)
     return result
   where
     msgHandler :: BasicInterpreter -> Callbacks
-    msgHandler interpreter = Callbacks
-      {_callbackMsgFor = \name msg -> do registrations <- readMVar (_registrations interpreter)
+    msgHandler bi = Callbacks
+      {_callbackMsgFor = \name msg -> do registrations <- readMVar (_registrations bi)
                                          case Map.lookup name registrations of
 
-                                             -- Client promises we won't be sent messages to names
-                                             -- we havnt registered
+                                             -- Client promises we wont be sent messages to names
+                                             -- we havnt registered, so this shouldnt happen.
                                              Nothing -> return ()
 
                                              Just registerF -> registerF msg
 
       -- TODO
-      ,_callbackServerQuit   = return ()
+      ,_callbackServerQuit = return ()
 
       -- TODO
       ,_callbackUnregistered = \n ns -> return ()
       }
-
-
-instance Interpreter BasicInterpreter IO where
-  getInterpreterFs basicInterpreter@(BasicInterpreter children channelOwnersRef replyCtx _ _) = InterpreterFs
-    {_iReturn     = \a -> return a
-
-    ,_iDef        = \definitions
-                     -> registerDefinition (toDefinitions definitions) channelOwnersRef
-
-    ,_iNewChannel = inferChannel <$> newChanId
-
-    ,_iSend       = \c m
-                     -> registerMessage c m basicInterpreter
-
-    ,_iSpawn      = \p
-                     -> void $ forkChild children $ interpretWith basicInterpreter p
-
-    ,_iSync       = \sc sm
-                     -> registerSyncMessage sc sm basicInterpreter
-
-    ,_iReply      = \sc m
-                     -> putMVar (lookupReplyChan replyCtx (getId sc)) m
-
-    ,_iWith       = \p q
-                     -> mapM_ (forkChild children . interpretWith basicInterpreter) [p,q]
-    }
 
 -- | Lookup a ChanId's associated ReplyChan 'r' within a ReplyCtx.
 -- The ChanId must have an associated ReplyChan and it must
@@ -226,7 +238,7 @@ registerMessage chan msg bi = do
 
             case mProcCtx of
               Nothing -> return ()
-              Just (p,replyCtx) -> do forkChild children $ interpretWith bi{_replyCtx=replyCtx} p
+              Just (p,replyCtx) -> do forkChild children $ interpretProgramUsing (coreInterpreter $ bi{_replyCtx=replyCtx}) p
                                       return ()
 
     -- Channel is owned by a remote node. Encode and relay.
@@ -257,7 +269,7 @@ registerSyncMessage chan msg bi = do
 
             case mProcCtx of
               Nothing -> return response
-              Just (p,replyCtx) -> do forkChild children $ interpretWith (BasicInterpreter children channelOwnersRef replyCtx undefined undefined) p
+              Just (p,replyCtx) -> do forkChild children $ interpretProgramUsing (coreInterpreter (BasicInterpreter children channelOwnersRef replyCtx undefined undefined)) p
                                       return response
 
     OwnedByRemoteName name -> error "Synchronous remote names not implemented"
@@ -294,8 +306,8 @@ newId = hashUnique <$> newUnique
 --
 -- It is the callers responsibility to ensure the channels type is correct.
 -- Providing an incorrect type may cause exceptions on the recieving end.
-lookupChannel :: forall a. MessageType a => BasicInterpreter -> Name -> Process (Maybe (Channel A a))
-lookupChannel bi name = do
+lookupChannel' :: forall a. MessageType a => BasicInterpreter -> Name -> Process (Maybe (Channel A a))
+lookupChannel' bi name = do
   nameExists <- liftIO $ query (fromJust $ _nsClient bi) name
   if nameExists
     then do chan <- newChannel :: Process (Channel A a)
@@ -311,8 +323,8 @@ lookupChannel bi name = do
 
 -- | Register a channel to a global name within the nameserver.
 -- Return Bool indicates success.
-registerChannel :: forall a. MessageType a => BasicInterpreter -> Name -> Channel A a -> Process Bool
-registerChannel bi name chan = do
+registerChannel' :: forall a. MessageType a => BasicInterpreter -> Name -> Channel A a -> Process Bool
+registerChannel' bi name chan = do
   nowRegistered <- liftIO $ register (fromJust $ _nsClient bi) name
   if nowRegistered
     then do registrations <- liftIO $ takeMVar (_registrations bi)
