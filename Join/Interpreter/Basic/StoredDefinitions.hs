@@ -1,18 +1,19 @@
-{-# LANGUAGE DataKinds
-            ,ExistentialQuantification
-            ,FlexibleContexts
-            ,FlexibleInstances
-            ,FunctionalDependencies
-            ,GADTs
-            ,KindSignatures
-            ,MultiParamTypeClasses
-            ,PolyKinds
-            ,RankNTypes
-            ,ScopedTypeVariables
-            ,TypeFamilies
-            ,TypeOperators
-            ,UndecidableInstances
-            ,IncoherentInstances
+{-# LANGUAGE
+    DataKinds
+  , ExistentialQuantification
+  , FlexibleContexts
+  , FlexibleInstances
+  , FunctionalDependencies
+  , GADTs
+  , KindSignatures
+  , MultiParamTypeClasses
+  , PolyKinds
+  , RankNTypes
+  , ScopedTypeVariables
+  , TypeFamilies
+  , TypeOperators
+  , UndecidableInstances
+  , IncoherentInstances
   #-}
 {-|
 Module      : Join.Interpreter.Basic.StoredDefinitions
@@ -53,40 +54,46 @@ import Join.Interpreter.Basic.MessageBox
 -- by a possible 'BoxIx' referencing the subbox where messages which
 -- would match a 'MatchWhen pred' predicate are kept.
 data StoredPattern s m p where
-  StoredPattern :: (MessageType m,Typeable s)
-                => Channel (s :: Synchronicity *) m
-                -> Maybe BoxIx
-                -> ShouldPass p
-                -> StoredPattern s m p
+  StoredPattern
+    :: (MessageType m,Typeable s)
+    => Channel (s :: Synchronicity *) m
+    -> Maybe BoxIx
+    -> ShouldPass p
+    -> StoredPattern s m p
 
 -- | Stored analogy to 'Patterns'.
 data StoredPatterns (ts :: [*]) where
-  OneStoredPattern :: StoredPattern s m p
-                   -> StoredPatterns '[Pattern s m p]
+  OneStoredPattern
+    :: StoredPattern s m p
+    -> StoredPatterns '[Pattern s m p]
 
-  AndStoredPattern :: StoredPattern s m p
-                   -> StoredPatterns ts
-                   -> StoredPatterns ((Pattern s m p) ': ts)
+  AndStoredPattern
+    :: StoredPattern s m p
+    -> StoredPatterns ts
+    -> StoredPatterns ((Pattern s m p) ': ts)
 
 -- | Stored analogy to 'Definition', with differences:
 -- - StoredPatterns instead of Pattern
 -- - Concrete return type Inert.
 -- - additional 'refine' type allowing definitions to be tagged with a value.
 data StoredDefinition ts tr refine where
-  StoredDefinition :: (tr~TriggerType ts Inert,Apply tr Inert)
-                   => StoredPatterns ts
-                   -> Trigger tr Inert
-                   -> refine
-                   -> StoredDefinition ts tr refine
+  StoredDefinition
+    :: (tr~TriggerType ts Inert,Apply tr Inert)
+    => StoredPatterns ts
+    -> Trigger tr Inert
+    -> refine
+    -> StoredDefinition ts tr refine
 
 -- | Stored analogy to 'Definitions'.
 data StoredDefinitions tss refine where
-  OneStoredDefinition :: StoredDefinition ts tr refine
-                      -> StoredDefinitions '[Definition ts tr Inert] refine
+  OneStoredDefinition
+    :: StoredDefinition ts tr refine
+    -> StoredDefinitions '[Definition ts tr Inert] refine
 
-  AndStoredDefinition :: StoredDefinition ts tr refine
-                      -> StoredDefinitions tss refine
-                      -> StoredDefinitions ((Definition ts tr Inert) ': tss) refine
+  AndStoredDefinition
+    :: StoredDefinition ts tr refine
+    -> StoredDefinitions tss refine
+    -> StoredDefinitions ((Definition ts tr Inert) ': tss) refine
 
 -- | Fold a function over the StoredPattern contained within a StoredPatterns.
 foldStoredPatterns :: (forall m s p. (MessageType m,Typeable s) => Channel (s::Synchronicity *) m -> Maybe BoxIx -> ShouldPass p -> acc -> acc)

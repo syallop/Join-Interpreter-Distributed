@@ -1,15 +1,16 @@
-{-# LANGUAGE DataKinds
-            ,FlexibleContexts
-            ,FlexibleInstances
-            ,GADTs
-            ,KindSignatures
-            ,ImpredicativeTypes
-            ,OverloadedLists
-            ,OverloadedStrings
-            ,RankNTypes
-            ,ScopedTypeVariables
-            ,TypeSynonymInstances
-            #-}
+{-# LANGUAGE
+    DataKinds
+  , FlexibleContexts
+  , FlexibleInstances
+  , GADTs
+  , KindSignatures
+  , ImpredicativeTypes
+  , OverloadedLists
+  , OverloadedStrings
+  , RankNTypes
+  , ScopedTypeVariables
+  , TypeSynonymInstances
+  #-}
 module Join.Interpreter.Basic.Rule
     (Rule()
     ,ReplyCtx

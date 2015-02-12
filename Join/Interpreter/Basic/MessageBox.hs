@@ -1,14 +1,15 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving
-           , OverloadedStrings
-           , FlexibleInstances
-           , ScopedTypeVariables
-           , DeriveDataTypeable
-           , GADTs
-           , DataKinds
-           , KindSignatures
-           , RankNTypes
-           , PolyKinds
- #-}
+{-# LANGUAGE
+    GeneralizedNewtypeDeriving
+  , OverloadedStrings
+  , FlexibleInstances
+  , ScopedTypeVariables
+  , DeriveDataTypeable
+  , GADTs
+  , DataKinds
+  , KindSignatures
+  , RankNTypes
+  , PolyKinds
+  #-}
 {-|
 Module     : Join.Interpreter.Basic.MessageBox
 Copyright  : (c) Samuel A. Yallop, 2014

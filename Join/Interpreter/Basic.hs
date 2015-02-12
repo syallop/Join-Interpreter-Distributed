@@ -1,13 +1,13 @@
-{-# LANGUAGE DataKinds
-            ,GADTs
-            ,KindSignatures
-            ,MultiParamTypeClasses
-            ,PolyKinds
-            ,RankNTypes
-            ,ScopedTypeVariables
-            ,TypeOperators
-
-            ,FlexibleContexts
+{-# LANGUAGE
+    DataKinds
+  , GADTs
+  , KindSignatures
+  , MultiParamTypeClasses
+  , PolyKinds
+  , RankNTypes
+  , ScopedTypeVariables
+  , TypeOperators
+  , FlexibleContexts
   #-}
 {-|
 Module      : Join.Interpreter.Basic
