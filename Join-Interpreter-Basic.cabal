@@ -84,11 +84,11 @@ library
   -- Other library packages from which modules are imported.
   build-depends:       base          >=4.7  && <4.8
 
-                     , Join-Language >=0.3  && <0.4
+                     , Join-Language >=0.4  && <0.5
 
                      , Network-NS    >=0.1  && <0.2
 
-                     , DSL-Compose   >=0.2  && <0.3
+                     , DSL-Compose   >=0.3.2 && <0.4
 
                      , bimap         >=0.2  && <0.3
                      , bytestring    >=0.10 && <0.11

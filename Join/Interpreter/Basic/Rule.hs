@@ -44,6 +44,8 @@ import qualified Data.Set       as Set
 import           Data.Typeable
 import           Data.Maybe
 
+import DSL.Program
+
 import Prelude hiding (take)
 
 -- | System-wide unique rule id.
@@ -91,13 +93,13 @@ data SomeReplyChan = forall r. Typeable r => SomeReplyChan (ReplyChan r)
 -- - 'mkRule'     : Create a new rule representing a Join Definition
 -- - 'addMessage' : Add a message on a contained 'ChanId', returning
 --                  a 'Process's and 'ReplyCtx's if triggered.
-data Rule tss refine = Rule
+data Rule tss p refine = Rule
     { _ruleId       :: RuleId                          -- ^ Uniquely identify the 'Rule'
     , _chanMapping  :: ChanMapping                     -- ^ Map each contained ChanId to a BoxId
     , _messageBoxes :: MessageBoxes                    -- ^ Map each contained BoxId to a MessageBox
     , _statusIxs    :: StatusIxs                       -- ^ Associate 'MessageLocation's to StatusIx's (in the Status) caching their emptyness.
     , _status       :: Status                          -- ^ Cache the emptyness of all known MessageLocations used by the rule.
-    , _patterns     :: StoredDefinitions tss refine
+    , _patterns     :: StoredDefinitions tss p refine
                                                        -- ^ Collection of StatusPatterns and corresponding StoredPatterns.
                                                        --   each StatusPattern can be quickly compared against the Status to determine whether a pattern
                                                        --   has been matched. If so, the associated StoredPattern describes how to perform the match.
@@ -107,7 +109,7 @@ data Rule tss refine = Rule
 
 -- | From a list of 'PatternDescription's and associated 'TriggerF'
 -- functions, build a corresponding 'Rule'.
-mkRule :: forall tss. Definitions tss Inert -> RuleId -> Rule tss StatusPattern
+mkRule :: forall tss p. Definitions tss (p ()) -> RuleId -> Rule tss p StatusPattern
 mkRule definitions rId =
   let -- Every unique channelId passed in desc.
       cIds :: Set.Set ChanId
@@ -144,9 +146,9 @@ mkRule definitions rId =
             }
   where
 
-    initialiseDefinitions :: Definitions tss Inert
+    initialiseDefinitions :: Definitions tss (p ())
                           -> (ChanMapping,MessageBoxes,StatusIxs,Int)
-                          -> ((ChanMapping,MessageBoxes,StatusIxs,Int),StoredDefinitions tss ())
+                          -> ((ChanMapping,MessageBoxes,StatusIxs,Int),StoredDefinitions tss p ())
     initialiseDefinitions definitions acc = storeDefinitionsWith assignBoxIx acc definitions
       where
         assignBoxIx :: forall (s :: Synchronicity *) m tss. (MessageType m,Typeable s)
@@ -175,7 +177,7 @@ mkRule definitions rId =
                                         )
 
     -- Tag prepared definitions with StatusPattern's which decide when they trigger.
-    tagStatusPatterns :: StoredDefinitions tss () -> ChanMapping -> StatusIxs -> Int -> StoredDefinitions tss StatusPattern
+    tagStatusPatterns :: StoredDefinitions tss p () -> ChanMapping -> StatusIxs -> Int -> StoredDefinitions tss p StatusPattern
     tagStatusPatterns sdr cM statusIxs size = mapStoredDefinitions (assignStatusPattern (statusIxs,size)) sdr
       where
         assignStatusPattern :: (StatusIxs,Int) -> StoredPatterns ts -> StatusPattern
@@ -183,7 +185,7 @@ mkRule definitions rId =
           = let locations = foldStoredPatterns extractLocations [] spsr
                in buildStatusPattern locations statusIxs size
 
-        extractLocations :: MessageType m => Channel (s :: Synchronicity *) m -> Maybe BoxIx -> ShouldPass p -> [MessageLocation] -> [MessageLocation]
+        extractLocations :: MessageType m => Channel (s :: Synchronicity *) m -> Maybe BoxIx -> ShouldPass sp -> [MessageLocation] -> [MessageLocation]
         extractLocations c m sp acc = acc ++ [((fromJust $ Bimap.lookup (getId c) cM),m)]
 
         buildStatusPattern :: [MessageLocation]-> StatusIxs -> Int -> StatusPattern
@@ -199,9 +201,12 @@ mkRule definitions rId =
 -- to produce a 'Process ()' to execute under the given 'ReplyCtx' (which
 -- describes the specific reply location(s) of the messages which caused
 -- the trigger).
-addMessage :: forall s a tss
+addMessage :: forall s a tss i p
             . (MessageType a,Typeable s)
-           => Message s a -> ChanId -> Rule tss StatusPattern -> (Rule tss StatusPattern,Maybe (Process (),ReplyCtx))
+           => Message s a
+           -> ChanId
+           -> Rule tss p StatusPattern
+           -> (Rule tss p StatusPattern,Maybe (p (),ReplyCtx))
 addMessage msg cId rl
 
     | otherwise =
@@ -238,18 +243,18 @@ addMessage msg cId rl
     cStatusIx = takeChanCatchAll cId (_chanMapping rl) (_statusIxs rl)
 
     -- | Identify all matching 'StatusPatterns' of a 'Status'.
-    identifyMatches :: forall tss'. StoredDefinitions tss' StatusPattern
-                    -> Rule tss StatusPattern
-                    -> (Rule tss StatusPattern,Maybe (Process (),ReplyCtx))
+    identifyMatches :: forall tss'. StoredDefinitions tss' p StatusPattern
+                    -> Rule tss p StatusPattern
+                    -> (Rule tss p StatusPattern,Maybe (p (),ReplyCtx))
     identifyMatches (OneStoredDefinition sdr)      rl = identifyMatches' sdr rl
     identifyMatches (AndStoredDefinition sdr sdrs) rl = case identifyMatches' sdr rl of
       (rl',Nothing) -> identifyMatches sdrs rl'
       (rl',Just r ) -> (rl',Just r)
 
     identifyMatches' :: forall ts tr tss
-                      .StoredDefinition ts tr StatusPattern
-                     -> Rule tss StatusPattern
-                     -> (Rule tss StatusPattern, Maybe (Process (),ReplyCtx))
+                      .StoredDefinition ts tr p StatusPattern
+                     -> Rule tss p StatusPattern
+                     -> (Rule tss p StatusPattern, Maybe (p (),ReplyCtx))
     identifyMatches' (StoredDefinition spr (Trigger tr) statusPattern) rl
       | (_status rl) `match` statusPattern =
           let (status',msgBoxes',msgs,replyCtx) = takeRequestedMessages spr (_chanMapping rl) (_statusIxs rl) (_status rl) (_messageBoxes rl)
@@ -347,7 +352,7 @@ takeMessageBox' boxId messageBoxes = case Map.lookup boxId messageBoxes of
 
 
 -- | Format a human-readable representation of a 'Rule'.
-showRule :: Rule tss StatusPattern -> String
+showRule :: Rule tss p StatusPattern -> String
 showRule rl = "Rule " ++ showRuleId (_ruleId rl) ++ "{ \n"
            ++ showChanMapping (_chanMapping rl)
            ++ "Status:\n" ++ showStatus (_status rl)
@@ -374,10 +379,10 @@ showStatusIxs ixs = "\n\nMessageLocation -> StatusIx:\n"
 showStatusIx :: (MessageLocation,StatusIx) -> String
 showStatusIx ((BoxId bId,mBoxIx),statusIx) = show bId ++ "," ++ (maybe "_" (\(BoxIx ix) -> show ix) mBoxIx) ++ " -> " ++ show statusIx
 
-showPatterns :: StoredDefinitions tss StatusPattern -> String
+showPatterns :: StoredDefinitions tss r StatusPattern -> String
 showPatterns sdr = foldStoredDefinitions showPattern "\n\nRefine => StoredPattern\n" sdr
 
-showPattern :: forall ts tr. StoredDefinition ts tr StatusPattern -> String -> String
+showPattern :: forall ts tr r. StoredDefinition ts tr r StatusPattern -> String -> String
 showPattern (StoredDefinition spr tr statusPattern) acc = acc ++ (showStatusPattern statusPattern) ++ " => " ++ (showStoredPatterns spr) ++ "\n"
 
 showStoredPatterns :: StoredPatterns ts -> String
