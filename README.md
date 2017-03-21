@@ -1,16 +1,16 @@
-#Basic Join-Language Interpreter
+# Basic Join-Language Interpreter
 This module exports a basic interpreter for
 [Join-Language](../Join-Language/)
 which is an attempt at encoding the join calculus within the Haskell programming
 language as an embedded DSL.
 
-##Usage
+## Usage
 
 1. Write a join program using [Join-Language](../Join-Language/)
 2. Call ‘run’ (from Join.Interpreter.Basic) on the top-level process
    to execute it as an IO action.
 
-##Implementation details
+## Implementation details
 The interpreter is called ‘basic’ because it is a fairly quick and dirty implementation
 , not fully optimised and not implementing some possible features.
 
