@@ -1,6 +1,7 @@
 resolver: lts-8.9
 packages:
 - .
+- ../
 - location: https://github.com/syallop/Join-Language/archive/master.zip
   extra-dep: true
 - location: https://github.com/syallop/DSL-Compose/archive/master.zip
@@ -14,3 +15,4 @@ packages:
 extra-deps:
 flags: {}
 extra-package-dbs: []
+

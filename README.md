@@ -1,17 +1,21 @@
-# Basic Join-Language Interpreter
+# Distributed Join-Language Interpreter
 This module exports a basic interpreter for
 [Join-Language](../Join-Language/)
 which is an attempt at encoding the join calculus within the Haskell programming
 language as an embedded DSL.
 
+It is a fork of [Join-Interpreter-Basic](../Join-Interpreter-Basic/)
+substituting the use of a centralised Name Server for a Distributed Hash Table.
+This functionality is used for the distributed DSLs channel registration and
+lookup features.
 ## Usage
 
 1. Write a join program using [Join-Language](../Join-Language/)
-2. Call ‘run’ (from Join.Interpreter.Basic) on the top-level process
+2. Call ‘run’ (from Join.Interpreter.Distributed) on the top-level process
    to execute it as an IO action.
 
 ## Implementation details
-The interpreter is called ‘basic’ because it is a fairly quick and dirty implementation
+The interpreter is a fairly quick and dirty implementation
 , not fully optimised and not implementing some possible features.
 
 The primary optimisation is that definitions are compiled to bit-patterns

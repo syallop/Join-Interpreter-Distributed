@@ -1,4 +1,4 @@
-module Join.Interpreter.Basic.Debug where
+module Join.Interpreter.Distributed.Debug where
 import qualified Debug.Trace as Debug
 
 debug = False

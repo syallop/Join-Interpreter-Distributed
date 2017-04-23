@@ -11,8 +11,8 @@
   , PolyKinds
   #-}
 {-|
-Module     : Join.Interpreter.Basic.MessageBox
-Copyright  : (c) Samuel A. Yallop, 2014
+Module     : Join.Interpreter.Distributed.MessageBox
+Copyright  : (c) Samuel A. Yallop, 2017
 Maintainer : syallop@gmail.com
 Stability  : experimental
 
@@ -20,7 +20,7 @@ This module provides a data structure for storing messages which are automatical
 sub-categorised by arbitrary predicates.
 -}
 
-module Join.Interpreter.Basic.MessageBox
+module Join.Interpreter.Distributed.MessageBox
     (
     -- * Types
      Message(..)
@@ -55,7 +55,7 @@ module Join.Interpreter.Basic.MessageBox
     ,showMessageBox
     ) where
 
-import Join.Interpreter.Basic.Status
+import Join.Interpreter.Distributed.Status
 
 import Join.Channel
 import Join.Message

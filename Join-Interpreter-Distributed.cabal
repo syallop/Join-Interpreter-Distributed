@@ -1,19 +1,24 @@
-name:                Join-Interpreter-Basic
-version:             0.4.0.0
+name:                Join-Interpreter-Distributed
+version:             0.1.0.0
 license-file:        LICENSE
 author:              Samuel A. Yallop
 maintainer:          syallop@gmail.com
+synopsis:            An interpreter for Join-Language backed by a DHT
+description:         This module exports a basic interpreter for Join-Language
+                     which is an attempt at encoding the Join Calculus within
+                     Haskell. Distributed channel registration and lookup are backed by a
+                     DHT.
 category:            Join
 build-type:          Simple
 cabal-version:       >=1.10
 library
   -- Modules exported by the library.
-  exposed-modules:     Join.Interpreter.Basic
-                     , Join.Interpreter.Basic.StoredDefinitions
-                     , Join.Interpreter.Basic.Debug
-                     , Join.Interpreter.Basic.Status
-                     , Join.Interpreter.Basic.MessageBox
-                     , Join.Interpreter.Basic.Rule
+  exposed-modules:     Join.Interpreter.Distributed
+                     , Join.Interpreter.Distributed.StoredDefinitions
+                     , Join.Interpreter.Distributed.Debug
+                     , Join.Interpreter.Distributed.Status
+                     , Join.Interpreter.Distributed.MessageBox
+                     , Join.Interpreter.Distributed.Rule
 
   other-extensions:    DataKinds
                      , DeriveDataTypeable
@@ -40,16 +45,23 @@ library
   -- Other library packages from which modules are imported.
   build-depends:       base
                      , Join-Language
-                     , Network-NS
+                     , time
+                     , random
                      , DSL-Compose
                      , bimap
                      , bytestring
+                     , binary
                      , containers
                      , transformers
                      , vector
                      , async
+                     , string-conv
+                     , network
                      , base
+                     , DHT
+                     , DHT-NS
 
   -- Base language which the package is written in.
   default-language:    Haskell2010
 
+  ghc-options: -threaded

@@ -11,7 +11,7 @@
   , ScopedTypeVariables
   , TypeSynonymInstances
   #-}
-module Join.Interpreter.Basic.Rule
+module Join.Interpreter.Distributed.Rule
     (Rule()
     ,ReplyCtx
     ,ReplyChan
@@ -30,10 +30,10 @@ module Join.Interpreter.Basic.Rule
 import Join
 import Join.Pattern.Rep
 
-import Join.Interpreter.Basic.Debug
-import Join.Interpreter.Basic.StoredDefinitions
-import Join.Interpreter.Basic.MessageBox
-import Join.Interpreter.Basic.Status
+import Join.Interpreter.Distributed.Debug
+import Join.Interpreter.Distributed.StoredDefinitions
+import Join.Interpreter.Distributed.MessageBox
+import Join.Interpreter.Distributed.Status
 
 import           Control.Arrow
 import           Data.Dynamic
