@@ -338,7 +338,7 @@ valid msgBox = and [validMsgIxs
                    ]
   where
     -- Test 1
-    validMsgIxs = Map.foldWithKey (\ix ix' b -> ix==ix' && b) True ixCache
+    validMsgIxs = Map.foldrWithKey (\ix ix' b -> ix==ix' && b) True ixCache
       where
         ixCache = Map.map _msgIx (_storedMessages msgBox) :: Map.Map MsgIx MsgIx
 
@@ -352,7 +352,7 @@ valid msgBox = and [validMsgIxs
     validSubBoxCache strdMsg = (_containedIn strdMsg) == (whichSubBoxes (_message strdMsg) (_subBoxPredicates msgBox))
 
     -- Test 3
-    validSubBoxesContents = Map.foldWithKey (\boxIx msgIxs b -> validSubBoxContents boxIx msgIxs && b) True (_subBoxes msgBox)
+    validSubBoxesContents = Map.foldrWithKey (\boxIx msgIxs b -> validSubBoxContents boxIx msgIxs && b) True (_subBoxes msgBox)
       where
         -- Test 3.*
         validSubBoxContents :: BoxIx -> MsgIxs -> Bool
